@@ -1,4 +1,4 @@
-#include "stdafx.h"
+ï»¿#include "stdafx.h"
 #include "toolkit.h"
 #include <string.h>
 #include <time.h>
@@ -49,6 +49,13 @@ void makedirs(const char* dir)
 	delete[] p;
 }
 
+double my_round(float val, int x)
+{
+	double i = ((long)(val * 10000.0 + 0.5)) / 10000.0;
+	return i;
+}
+
+
 char* GetSetFromString(const char* szString, const char* seps, vector<char*>& vct, set<char*>& st, int modify, set<string>& st2, int before, const char* prefix)
 {
 	vct.clear();
@@ -62,7 +69,7 @@ char* GetSetFromString(const char* szString, const char* seps, vector<char*>& vc
 		||strlen(seps)==0)
 		return nullptr;
 
-	//ÕâÀï²»ÖªµÀÒªÌí¼ÓµÄ×Ö·ûÓĞ¶à³¤£¬ºÜ±¯¾ç
+	//è¿™é‡Œä¸çŸ¥é“è¦æ·»åŠ çš„å­—ç¬¦æœ‰å¤šé•¿ï¼Œå¾ˆæ‚²å‰§
 	size_t len = (size_t)(strlen(szString)*1.5+1);
 	char* buf = new char[len];
 	strncpy(buf,szString,len);
@@ -142,7 +149,7 @@ int GetTime(char* UpdateTime)
 
 int GetUpdateTime(char* UpdateTime, int* _UpdateTime, int* UpdateMillisec)
 {
-	// UpdateTime´¦Àí
+	// UpdateTimeå¤„ç†
 	int HH = 0;// atoi(&UpdateTime[0]);
 	int mm = 0;//atoi(&UpdateTime[3]);
 	int ss = 0;//atoi(&UpdateTime[6]);
@@ -183,9 +190,15 @@ int GetUpdateTime(char* UpdateTime, int* _UpdateTime, int* UpdateMillisec)
 	return HH;
 }
 
-void GetExchangeTime(char* TradingDay, char* ActionDay, char* UpdateTime, int* _TradingDay, int* _ActionDay, int* _UpdateTime, int* UpdateMillisec)
+void GetExchangeTime_DCE(char* TradingDay, char* ActionDay, char* UpdateTime, int* _TradingDay, int* _ActionDay, int* _UpdateTime, int* UpdateMillisec)
 {
-	// TradingDay´¦Àí
+//DCE
+//TradingDay : äº¤æ˜“æ—¥
+//ActionDay : äº¤æ˜“æ—¥
+	// UpdateTimeå¤„ç†
+	int HH = GetUpdateTime(UpdateTime, _UpdateTime, UpdateMillisec);
+
+	// TradingDayå¤„ç†
 	if (_TradingDay)
 	{
 		int tradingday = atoi(TradingDay);
@@ -198,13 +211,73 @@ void GetExchangeTime(char* TradingDay, char* ActionDay, char* UpdateTime, int* _
 		*_TradingDay = tradingday;
 	}
 
-	// UpdateTime´¦Àí
+	if (_ActionDay == nullptr)
+		return;
+
+	// ActionDayå¤„ç†
+	if ((HH>6 && HH<18) && (ActionDay != nullptr) && (strlen(ActionDay) == 8))
+	{
+		*_ActionDay = atoi(ActionDay);
+	}
+	else
+	{
+		time_t now = time(0);
+		struct tm *ptmNow = localtime(&now);
+		if (HH >= 23)
+		{
+			if (ptmNow->tm_hour<1)
+			{
+				now -= 86400;
+				ptmNow = localtime(&now);
+			}
+		}
+		else if (HH<1)
+		{
+			if (ptmNow->tm_hour >= 23)
+			{
+				now += 86400;
+				ptmNow = localtime(&now);
+			}
+		}
+
+		*_ActionDay = (1900 + ptmNow->tm_year) * 10000 + (1 + ptmNow->tm_mon) * 100 + ptmNow->tm_mday;
+	}
+}
+
+void GetExchangeTime_CZCE(int iTradingDay, char* TradingDay, char* ActionDay, char* UpdateTime, int* _TradingDay, int* _ActionDay, int* _UpdateTime, int* UpdateMillisec)
+{
+//CZC
+//TradingDay : è¡Œæƒ…æ—¥
+//ActionDay : è¡Œæƒ…æ—¥
+
+	// UpdateTimeå¤„ç†
 	int HH = GetUpdateTime(UpdateTime, _UpdateTime, UpdateMillisec);
+
+	// TradingDayå¤„ç†
+	if (_TradingDay)
+	{
+		int tradingday = 0;
+		if ((HH > 18 || HH < 6))
+		{
+			tradingday = iTradingDay;
+		}
+		else
+		{
+			tradingday = atoi(TradingDay);
+		}
+		if (tradingday == 0)
+		{
+			time_t now = time(0);
+			struct tm *ptmNow = localtime(&now);
+			tradingday = (ptmNow->tm_year + 1900) * 10000 + (ptmNow->tm_mon + 1) * 100 + ptmNow->tm_mday;
+		}
+		*_TradingDay = tradingday;
+	}
 
 	if (_ActionDay == nullptr)
 		return;
 
-	// ActionDay´¦Àí
+	// ActionDayå¤„ç†
 	if ((ActionDay != nullptr) && (strlen(ActionDay) == 8))
 	{
 		*_ActionDay = atoi(ActionDay);
@@ -234,30 +307,165 @@ void GetExchangeTime(char* TradingDay, char* ActionDay, char* UpdateTime, int* _
 	}
 }
 
+void GetExchangeTime_Undefined(int iTradingDay, char* TradingDay, char* ActionDay, char* UpdateTime, int* _TradingDay, int* _ActionDay, int* _UpdateTime, int* UpdateMillisec)
+{
+	// ç”±äºCTPæœŸè´§ä¸­è¡Œæƒ…æ²¡æœ‰æä¾›äº¤æ˜“æ‰€ï¼Œæ‰€ä»¥ä¸€å¼€å§‹å°±æ— æ³•æŒ‰äº¤æ˜“æ‰€æ¥åˆ†ç±»
+
+	// UpdateTimeå¤„ç†
+	int HH = GetUpdateTime(UpdateTime, _UpdateTime, UpdateMillisec);
+
+	// TradingDayå¤„ç†
+	if (_TradingDay)
+	{
+		int tradingday = 0;
+		if ((HH > 18 || HH < 6))
+		{
+			tradingday = iTradingDay;
+		}
+		else
+		{
+			tradingday = atoi(TradingDay);
+		}
+		if (tradingday == 0)
+		{
+			time_t now = time(0);
+			struct tm *ptmNow = localtime(&now);
+			tradingday = (ptmNow->tm_year + 1900) * 10000 + (ptmNow->tm_mon + 1) * 100 + ptmNow->tm_mday;
+		}
+		*_TradingDay = tradingday;
+	}
+
+	if (_ActionDay == nullptr)
+		return;
+
+	// ActionDayå¤„ç†
+	if ((HH>6 && HH<18) && (ActionDay != nullptr) && (strlen(ActionDay) == 8))
+	{
+		*_ActionDay = atoi(ActionDay);
+	}
+	else
+	{
+		time_t now = time(0);
+		struct tm *ptmNow = localtime(&now);
+		if (HH >= 23)
+		{
+			if (ptmNow->tm_hour<1)
+			{
+				now -= 86400;
+				ptmNow = localtime(&now);
+			}
+		}
+		else if (HH<1)
+		{
+			if (ptmNow->tm_hour >= 23)
+			{
+				now += 86400;
+				ptmNow = localtime(&now);
+			}
+		}
+
+		*_ActionDay = (1900 + ptmNow->tm_year) * 10000 + (1 + ptmNow->tm_mon) * 100 + ptmNow->tm_mday;
+	}
+}
+
+void GetExchangeTime(char* TradingDay, char* ActionDay, char* UpdateTime, int* _TradingDay, int* _ActionDay, int* _UpdateTime, int* UpdateMillisec)
+{
+	// TradingDayå¤„ç†
+	if (_TradingDay)
+	{
+		int tradingday = atoi(TradingDay);
+		if (tradingday == 0)
+		{
+			time_t now = time(0);
+			struct tm *ptmNow = localtime(&now);
+			tradingday = (ptmNow->tm_year + 1900) * 10000 + (ptmNow->tm_mon + 1) * 100 + ptmNow->tm_mday;
+		}
+		*_TradingDay = tradingday;
+	}
+
+	// UpdateTimeå¤„ç†
+	int HH = GetUpdateTime(UpdateTime, _UpdateTime, UpdateMillisec);
+
+	if (_ActionDay == nullptr)
+		return;
+
+	// ActionDayå¤„ç†
+	if ((ActionDay != nullptr) && (strlen(ActionDay) == 8))
+	{
+		*_ActionDay = atoi(ActionDay);
+	}
+	else
+	{
+		time_t now = time(0);
+		struct tm *ptmNow = localtime(&now);
+		if (HH >= 23)
+		{
+			if (ptmNow->tm_hour<1)
+			{
+				now -= 86400;
+				ptmNow = localtime(&now);
+			}
+		}
+		else if (HH<1)
+		{
+			if (ptmNow->tm_hour >= 23)
+			{
+				now += 86400;
+				ptmNow = localtime(&now);
+			}
+		}
+
+		*_ActionDay = (1900 + ptmNow->tm_year) * 10000 + (1 + ptmNow->tm_mon) * 100 + ptmNow->tm_mday;
+	}
+}
+
+void GetExchangeTime(time_t Time, int* _TradingDay, int* _ActionDay, int* _UpdateTime)
+{
+	struct tm *ptmNow = localtime(&Time);
+
+	int date = (ptmNow->tm_year + 1900) * 10000 + (ptmNow->tm_mon + 1) * 100 + ptmNow->tm_mday;
+	int time = (ptmNow->tm_hour) * 10000 + (ptmNow->tm_min) * 100 + ptmNow->tm_sec;
+
+	if (_TradingDay)
+	{
+		*_TradingDay = date;
+	}
+
+	if (_ActionDay)
+	{
+		*_ActionDay = date;
+	}
+
+	if (_UpdateTime)
+	{
+		*_UpdateTime = time;
+	}
+}
+
 void GetOnFrontDisconnectedMsg(int ErrorId, char* ErrorMsg)
 {
 	switch (ErrorId)
 	{
 	case 0x1001:
-		strcpy(ErrorMsg, "0x1001 4097 ÍøÂç¶ÁÊ§°Ü");
+		strcpy(ErrorMsg, "0x1001 4097 ç½‘ç»œè¯»å¤±è´¥");
 		break;
 	case 0x1002:
-		strcpy(ErrorMsg, "0x1002 4098 ÍøÂçĞ´Ê§°Ü");
+		strcpy(ErrorMsg, "0x1002 4098 ç½‘ç»œå†™å¤±è´¥");
 		break;
 	case 0x2001:
-		strcpy(ErrorMsg, "0x2001 8193 ½ÓÊÕĞÄÌø³¬Ê±");
+		strcpy(ErrorMsg, "0x2001 8193 æ¥æ”¶å¿ƒè·³è¶…æ—¶");
 		break;
 	case 0x2002:
-		strcpy(ErrorMsg, "0x2002 8194 ·¢ËÍĞÄÌøÊ§°Ü");
+		strcpy(ErrorMsg, "0x2002 8194 å‘é€å¿ƒè·³å¤±è´¥");
 		break;
 	case 0x2003:
-		strcpy(ErrorMsg, "0x2003 8195 ÊÕµ½´íÎó±¨ÎÄ");
+		strcpy(ErrorMsg, "0x2003 8195 æ”¶åˆ°é”™è¯¯æŠ¥æ–‡");
 		break;
 	case 0x2004:
-		strcpy(ErrorMsg, "0x2004 8196 ·şÎñÆ÷Ö÷¶¯¶Ï¿ª");
+		strcpy(ErrorMsg, "0x2004 8196 æœåŠ¡å™¨ä¸»åŠ¨æ–­å¼€");
 		break;
 	default:
-		sprintf(ErrorMsg, "%x %d Î´Öª´íÎó", ErrorId, ErrorId);
+		sprintf(ErrorMsg, "%x %d æœªçŸ¥é”™è¯¯", ErrorId, ErrorId);
 		break;
 	}
 }

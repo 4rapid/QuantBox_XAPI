@@ -97,6 +97,10 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>..\include\ApiHeader.def</ModuleDefinitionFile>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy "$(TargetPath)"  "$(SolutionDir)XAPI\LTS\x86\" /Y
+xcopy "$(SolutionDir)include\LTS\win32\*.dll"  "$(SolutionDir)XAPI\LTS\x86\" /Y</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug64|Win32'">
     <ClCompile>
@@ -134,6 +138,7 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\include\ChinaStock.h" />
     <ClInclude Include="..\include\LTS\SecurityFtdcTraderApi.h" />
     <ClInclude Include="..\include\LTS\SecurityFtdcUserApiDataType.h" />
     <ClInclude Include="..\include\LTS\SecurityFtdcUserApiStruct.h" />
@@ -144,6 +149,7 @@
     <ClInclude Include="TypeConvert.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\include\ChinaStock.cpp" />
     <ClCompile Include="..\include\toolkit.cpp" />
     <ClCompile Include="dllmain.cpp">
       <CompileAsManaged Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</CompileAsManaged>

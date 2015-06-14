@@ -23,6 +23,16 @@
 
 using namespace std;
 
+struct OrderFieldEx
+{
+	OrderField Field;
+	TCustNoType         cust_no;                    ///< 客户号
+	TMarketCodeType     market_code;                ///< 市场代码（按批撤必须填入）
+	THolderNoType       holder_acc_no;              ///< 股东帐号
+	TBatchNoType        batch_no;                   ///< 批号
+	TContractNoType     order_no;                   ///< 流水号
+};
+
 class CMsgQueue;
 
 class CTraderApi
@@ -59,23 +69,25 @@ public:
 	CTraderApi(void);
 	virtual ~CTraderApi(void);
 
-	void Register(void* pCallback);
+	void Register(void* pCallback, void* pClass);
 
 	void Connect(const string& szPath,
 		ServerInfoField* pServerInfo,
-		UserInfoField* pUserInfo);
+		UserInfoField* pUserInfo,
+		int count);
 	void Disconnect();
 
-	char* ReqOrderInsert(
-		int OrderRef,
-		OrderField* pOrder, int count);
+	int ReqOrderInsert(
+		OrderField* pOrder,
+		int count,
+		OrderIDType* pInOut);
 
 	//char* ReqParkedOrderInsert(int OrderRef,
 	//	OrderField* pOrder1,
 	//	OrderField* pOrder2);
 
-	//int ReqOrderAction(const string& szId);
-	////int ReqOrderAction(CThostFtdcOrderField *pOrder);
+	int ReqOrderAction(OrderIDType* szId, int count, OrderIDType* pOutput);
+	int ReqOrderAction(OrderFieldEx *pOrder, int count, OrderIDType* pOutput);
 
 	//char* ReqQuoteInsert(
 	//	int QuoteRef,
@@ -87,19 +99,18 @@ public:
 	//void ReqQryTradingAccount();
 	//void ReqQryInvestorPosition(const string& szInstrumentId, const string& szExchange);
 	//void ReqQryInvestorPositionDetail(const string& szInstrumentId);
-	//void ReqQryInstrument(const string& szInstrumentId, const string& szExchange);
+	void ReqQryInstrument(const string& szInstrumentId, const string& szExchange);
 	//void ReqQryInstrumentCommissionRate(const string& szInstrumentId);
 	////void ReqQryInstrumentMarginRate(const string& szInstrumentId,TThostFtdcHedgeFlagType HedgeFlag = THOST_FTDC_HF_Speculation);
 	//void ReqQryDepthMarketData(const string& szInstrumentId);
 	//void ReqQrySettlementInfo(const string& szTradingDay);
 
-	//void ReqQryOrder();
-	//void ReqQryTrade();
+	void ReqQryOrder(TCustNoType cust_no, TSecCodeType sec_code);
+	void ReqQryTrade(TCustNoType cust_no, TSecCodeType sec_code);
 	//void ReqQryQuote();
 
 	
 private:
-	//friend void __stdcall OnReadPushData(ETX_APP_FUNCNO FuncNO, void* pEtxPushData);
 	static void __stdcall OnReadPushData(ETX_APP_FUNCNO FuncNO, void* pEtxPushData);
 	void _OnReadPushData(ETX_APP_FUNCNO FuncNO, void* pEtxPushData);
 
@@ -112,43 +123,14 @@ private:
 	void ReqUserLogin();
 	int _ReqUserLogin(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3);
 
+	int _ReqQryOrder(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3);
+	int _ReqQryTrade(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3);
+
+
 	void OnPST16203PushData(PST16203PushData pEtxPushData);
 	void OnPST16204PushData(PST16204PushData pEtxPushData);
 
-	//friend void* Send(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3);
-
-	/*void OnOrder(CThostFtdcOrderField *pOrder);
-	void OnTrade(CThostFtdcTradeField *pTrade);
-	void OnQuote(CThostFtdcQuoteField *pQuote);*/
-
-	//void OnTrade(TradeField *pTrade);
-
-	////数据包发送线程
-	//static void ProcessThread(CTraderApi* lpParam)
-	//{
-	//	if (lpParam)
-	//		lpParam->RunInThread();
-	//}
-	//void RunInThread();
-	//void StartThread();
-	//void StopThread();
-
-	////指定数据包类型，生成对应数据包
-	//SRequest * MakeRequestBuf(RequestType type);
-	////清除将发送请求包队列
-	//void ReleaseRequestListBuf();
-	////清除已发送请求包池
-	//void ReleaseRequestMapBuf();
-	////清除指定请求包池中指定包
-	//void ReleaseRequestMapBuf(int nRequestID);
-	////添加到已经请求包池
-	//void AddRequestMapBuf(int nRequestID,SRequest* pRequest);
-	////添加到将发送包队列
-	//void AddToSendQueue(SRequest * pRequest);
-
-	//void ReqAuthenticate();
-	//void ReqUserLogin();
-	//void ReqSettlementInfoConfirm();
+	
 
 	//检查是否出错
 	bool IsErrorRspInfo(STRspMsg *pRspInfo, int nRequestID, bool bIsLast);//向消息队列输出信息
@@ -232,9 +214,9 @@ private:
 
 	int							m_nSleep;
 
-	unordered_map<string, OrderField*>				m_id_platform_order;
-	//unordered_map<string, CThostFtdcOrderField*>		m_id_api_order;
-	unordered_map<string, string>					m_sysId_orderId;
+	unordered_map<string, OrderFieldEx*>				m_id_platform_order;
+	//unordered_map<string, STOrderInfo*>				m_id_api_order;
+	//unordered_map<string, string>					m_sysId_orderId;//成交回报时使用找到原订单
 
 	//unordered_map<string, QuoteField*>				m_id_platform_quote;
 	//unordered_map<string, CThostFtdcQuoteField*>		m_id_api_quote;
@@ -242,9 +224,18 @@ private:
 
 	//unordered_map<string, PositionField*>			m_id_platform_position;
 
-	CMsgQueue*					m_msgQueue;				//消息队列指针
-	CMsgQueue*					m_msgQueue_Query;			//发送消息队列指针
+	unordered_map<string, string>					m_cust_acc_no;
 
-	
+	CMsgQueue*					m_msgQueue;				//消息队列指针
+	CMsgQueue*					m_msgQueue_Query;		//发送消息队列指针
+	CMsgQueue*					m_msgQueue_Order;		//报单消息队列指针
+
+	UserInfoField*				m_pUserInfos;
+	int							m_UserInfo_Pos;
+	int							m_UserInfo_Count;
+
+	STOrderCancel				m_temp_ordercancel;
+
+	void*						m_pClass;
 };
 

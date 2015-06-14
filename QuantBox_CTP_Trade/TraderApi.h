@@ -61,31 +61,33 @@ public:
 	CTraderApi(void);
 	virtual ~CTraderApi(void);
 
-	void Register(void* pCallback);
+	void Register(void* pCallback,void* pClass);
 
 	void Connect(const string& szPath,
 		ServerInfoField* pServerInfo,
-		UserInfoField* pUserInfo);
+		UserInfoField* pUserInfo,
+		int count);
 	void Disconnect();
 
-	char* ReqOrderInsert(
-		int OrderRef,
-		OrderField* pOrder1,
-		OrderField* pOrder2);
+	int ReqOrderInsert(
+		OrderField* pOrder,
+		int count,
+		OrderIDType* pInOut);
 
 	char* ReqParkedOrderInsert(int OrderRef,
 		OrderField* pOrder1,
 		OrderField* pOrder2);
 
-	int ReqOrderAction(const string& szId);
-	int ReqOrderAction(CThostFtdcOrderField *pOrder);
+	int ReqOrderAction(OrderIDType* szIds, int count, OrderIDType* pOutput);
+	int ReqOrderAction(CThostFtdcOrderField *pOrder, int count, OrderIDType* pOutput);
 
 	char* ReqQuoteInsert(
-		int QuoteRef,
-		QuoteField* pQuote);
+		QuoteField* pQuote,
+		OrderIDType* pAskRef,
+		OrderIDType* pBidRef);
 
-	int ReqQuoteAction(CThostFtdcQuoteField *pQuote);
-	int ReqQuoteAction(const string& szId);
+	int ReqQuoteAction(CThostFtdcQuoteField *pQuote, OrderIDType* pOutput);
+	int ReqQuoteAction(const string& szId, OrderIDType* pOutput);
 
 	void ReqQryTradingAccount();
 	void ReqQryInvestorPosition(const string& szInstrumentId, const string& szExchange);
@@ -202,6 +204,7 @@ private:
 	CThostFtdcInvestorField		m_Investor;
 
 	OrderIDType					m_orderInsert_Id;
+	OrderIDType					m_orderAction_Id;
 
 	mutex						m_csOrderRef;
 	int							m_nMaxOrderRef;			//报单引用，用于区分报单，保持自增
@@ -225,5 +228,6 @@ private:
 
 	CMsgQueue*					m_msgQueue;				//消息队列指针
 	CMsgQueue*					m_msgQueue_Query;
+	void*						m_pClass;
 };
 

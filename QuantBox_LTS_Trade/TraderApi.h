@@ -58,20 +58,20 @@ public:
 	CTraderApi(void);
 	virtual ~CTraderApi(void);
 
-	void Register(void* pMsgQueue);
+	void Register(void* pCallback, void* pClass);
 
 	void Connect(const string& szPath,
 		ServerInfoField* pServerInfo,
 		UserInfoField* pUserInfo);
 	void Disconnect();
 
-	char* ReqOrderInsert(
-		int OrderRef,
-		OrderField* pOrder1,
-		OrderField* pOrder2);
+	int ReqOrderInsert(
+		OrderField* pOrder,
+		int count,
+		OrderIDType* pInOut);
 
-	int ReqOrderAction(const string& szId);
-	int ReqOrderAction(CSecurityFtdcOrderField *pOrder);
+	int ReqOrderAction(OrderIDType* szIds, int count, OrderIDType* pOutput);
+	int ReqOrderAction(CSecurityFtdcOrderField *pOrder, int count, OrderIDType* pOutput);
 
 	int ReqQuoteInsert(
 		int QuoteRef,
@@ -188,6 +188,7 @@ private:
 	CSecurityFtdcInvestorField	m_Investor;
 
 	OrderIDType					m_orderInsert_Id;
+	OrderIDType					m_orderAction_Id;
 
 	mutex						m_csOrderRef;
 	int							m_nMaxOrderRef;			//报单引用，用于区分报单，保持自增
@@ -207,5 +208,6 @@ private:
 
 	CMsgQueue*					m_msgQueue;				//消息队列指针
 	CMsgQueue*					m_msgQueue_Query;
+	void*						m_pClass;
 };
 

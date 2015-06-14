@@ -17,7 +17,7 @@ void* __stdcall XRequest(char type, void* pApi1, void* pApi2, double double1, do
 	case GetApiType:
 		return (void*)(ApiType::MarketData | ApiType::Level2);
 	case GetApiVersion:
-		return (void*)"0.1.0.20150112";
+		return (void*)"0.4.0.20150527";
 	case GetApiName:
 		return (void*)"LTS";
 	case Create:
@@ -39,7 +39,7 @@ void* __stdcall XRequest(char type, void* pApi1, void* pApi2, double double1, do
 		delete pApi;
 		return nullptr;
 	case Register:
-		pApi->Register(ptr1);
+		pApi->Register(ptr1,ptr2);
 		break;
 	case Connect:
 		pApi->Connect((const char*)ptr3, (ServerInfoField*)ptr1, (UserInfoField*)ptr2);
@@ -48,10 +48,10 @@ void* __stdcall XRequest(char type, void* pApi1, void* pApi2, double double1, do
 		pApi->Disconnect();
 		break;
 	case Subscribe:
-		pApi->SubscribeL2MarketData((const char*)ptr1, (const char*)ptr2);
+		pApi->Subscribe((const char*)ptr1, (const char*)ptr2);
 		break;
 	case Unsubscribe:
-		pApi->UnSubscribeL2MarketData((const char*)ptr1, (const char*)ptr2);
+		pApi->Unsubscribe((const char*)ptr1, (const char*)ptr2);
 		break;
 		//case SubscribeQuote:
 		//	pApi->SubscribeQuote((const char*)ptr1, (const char*)ptr2);

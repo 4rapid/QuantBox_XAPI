@@ -16,7 +16,7 @@ void* __stdcall XRequest(char type, void* pApi1, void* pApi2, double double1, do
 	case GetApiType:
 		return (void*)(ApiType::Trade | ApiType::Instrument);
 	case GetApiVersion:
-		return (void*)"0.1.0.20150112";
+		return (void*)"0.3.0.20150407";
 	case GetApiName:
 		return (void*)"Femas";
 	case Create:
@@ -38,7 +38,7 @@ void* __stdcall XRequest(char type, void* pApi1, void* pApi2, double double1, do
 		delete pApi;
 		return nullptr;
 	case Register:
-		pApi->Register(ptr1);
+		pApi->Register(ptr1, ptr2);
 		break;
 	case Connect:
 		pApi->Connect((const char*)ptr3, (ServerInfoField*)ptr1, (UserInfoField*)ptr2);
@@ -53,12 +53,11 @@ void* __stdcall XRequest(char type, void* pApi1, void* pApi2, double double1, do
 		pApi->ReqQryInvestorAccount();
 		break;
 	case ReqOrderInsert:
-		return pApi->ReqOrderInsert((int)double1, (OrderField*)ptr1);
+		return (void*)pApi->ReqOrderInsert((OrderField*)ptr1, size1, (OrderIDType*)ptr2);
 	//case ReqQuoteInsert:
 	//	return pApi->ReqQuoteInsert((int)double1, (OrderField*)ptr1, (OrderField*)ptr2);
 	case ReqOrderAction:
-		return (void*)pApi->ReqOrderAction((const char*)ptr1);
-		break;
+		return (void*)pApi->ReqOrderAction((OrderIDType*)ptr1, size1, (OrderIDType*)ptr2);
 	//case RequestType::SubscribeQuote:
 	//	pApi->ReqQuoteSubscribe((const char*)ptr2, DFITC_OPT_TYPE);
 	//	break;

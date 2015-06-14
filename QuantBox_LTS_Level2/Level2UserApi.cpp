@@ -7,19 +7,38 @@
 #include "../include/ApiStruct.h"
 
 #include "../include/toolkit.h"
+#include "../include/ApiProcess.h"
+
+#include "../include/ChinaStock.h"
 
 #include "../QuantBox_Queue/MsgQueue.h"
+#ifdef _REMOTE
+#include "../QuantBox_Queue/RemoteQueue.h"
+#endif
 
 #include <mutex>
 #include <vector>
 #include <cstring>
+
+ExchangeType TSecurityFtdcExchangeIDType_2_ExchangeType(TSecurityFtdcExchangeIDType In)
+{
+	switch (In[1])
+	{
+	case 'S':
+		return ExchangeType::SSE;
+	case 'Z':
+		return ExchangeType::SZE;
+	default:
+		return ExchangeType::Undefined_;
+	}
+}
 
 using namespace std;
 
 void* __stdcall Query(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3)
 {
 	// 由内部调用，不用检查是否为空
-	CLevel2UserApi* pApi = (CLevel2UserApi*)pApi1;
+	CLevel2UserApi* pApi = (CLevel2UserApi*)pApi2;
 	pApi->QueryInThread(type, pApi1, pApi2, double1, double2, ptr1, size1, ptr2, size2, ptr3, size3);
 	return nullptr;
 }
@@ -63,8 +82,10 @@ CLevel2UserApi::CLevel2UserApi(void)
 	m_msgQueue = new CMsgQueue();
 	m_msgQueue_Query = new CMsgQueue();
 
-	m_msgQueue_Query->Register((void*)Query);
+	m_msgQueue_Query->Register((void*)Query,this);
 	m_msgQueue_Query->StartThread();
+
+	m_remoteQueue = nullptr;
 }
 
 CLevel2UserApi::~CLevel2UserApi(void)
@@ -72,13 +93,14 @@ CLevel2UserApi::~CLevel2UserApi(void)
 	Disconnect();
 }
 
-void CLevel2UserApi::Register(void* pCallback)
+void CLevel2UserApi::Register(void* pCallback, void* pClass)
 {
+	m_pClass = pClass;
 	if (m_msgQueue == nullptr)
 		return;
 
-	m_msgQueue_Query->Register((void*)Query);
-	m_msgQueue->Register(pCallback);
+	m_msgQueue_Query->Register((void*)Query, this);
+	m_msgQueue->Register(pCallback, this);
 	if (pCallback)
 	{
 		m_msgQueue_Query->StartThread();
@@ -101,7 +123,7 @@ bool CLevel2UserApi::IsErrorRspInfo(CSecurityFtdcRspInfoField *pRspInfo, int nRe
 		pField->ErrorID = pRspInfo->ErrorID;
 		strcpy(pField->ErrorMsg, pRspInfo->ErrorMsg);
 
-		m_msgQueue->Input_NoCopy(ResponeType::OnRtnError, m_msgQueue, this, bIsLast, 0, pField, sizeof(ErrorField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnRtnError, m_msgQueue, m_pClass, bIsLast, 0, pField, sizeof(ErrorField), nullptr, 0, nullptr, 0);
 	}
 	return bRet;
 }
@@ -121,15 +143,24 @@ void CLevel2UserApi::Connect(const string& szPath,
 	memcpy(&m_ServerInfo, pServerInfo, sizeof(ServerInfoField));
 	memcpy(&m_UserInfo, pUserInfo, sizeof(UserInfoField));
 
-	m_msgQueue_Query->Input_NoCopy(RequestType::E_Init, this, nullptr, 0, 0,
+	m_msgQueue_Query->Input_NoCopy(RequestType::E_Init, m_msgQueue_Query, this, 0, 0,
 		nullptr, 0, nullptr, 0, nullptr, 0);
+
+#ifdef _REMOTE
+	// 将收到的行情通过ZeroMQ发送出去
+	if (strlen(m_ServerInfo.ExtendInformation) > 0)
+	{
+		m_remoteQueue = new CRemoteQueue(m_ServerInfo.ExtendInformation);
+		m_remoteQueue->StartThread();
+	}
+#endif
 }
 
 int CLevel2UserApi::_Init()
 {
 	m_pApi = CSecurityFtdcL2MDUserApi::CreateFtdcL2MDUserApi(m_ServerInfo.IsMulticast);
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Initialized, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Initialized, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
 	if (m_pApi)
 	{
@@ -153,7 +184,7 @@ int CLevel2UserApi::_Init()
 
 		//初始化连接
 		m_pApi->Init();
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Connecting, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Connecting, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 	}
 
 	return 0;
@@ -167,13 +198,13 @@ void CLevel2UserApi::ReqUserLogin()
 	strncpy(pBody->UserID, m_UserInfo.UserID, sizeof(TSecurityFtdcUserIDType));
 	strncpy(pBody->Password, m_UserInfo.Password, sizeof(TSecurityFtdcPasswordType));
 
-	m_msgQueue_Query->Input_NoCopy(RequestType::E_ReqUserLoginField, this, nullptr, 0, 0,
+	m_msgQueue_Query->Input_NoCopy(RequestType::E_ReqUserLoginField, m_msgQueue_Query, this, 0, 0,
 		pBody, sizeof(CSecurityFtdcUserLoginField), nullptr, 0, nullptr, 0);
 }
 
 int CLevel2UserApi::_ReqUserLogin(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3)
 {
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Logining, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Logining, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 	return m_pApi->ReqUserLogin((CSecurityFtdcUserLoginField*)ptr1, ++m_lRequestID);
 }
 
@@ -183,7 +214,7 @@ void CLevel2UserApi::Disconnect()
 	if (m_msgQueue_Query)
 	{
 		m_msgQueue_Query->StopThread();
-		m_msgQueue_Query->Register(nullptr);
+		m_msgQueue_Query->Register(nullptr,nullptr);
 		m_msgQueue_Query->Clear();
 		delete m_msgQueue_Query;
 		m_msgQueue_Query = nullptr;
@@ -197,7 +228,7 @@ void CLevel2UserApi::Disconnect()
 
 		// 全清理，只留最后一个
 		m_msgQueue->Clear();
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 		// 主动触发
 		m_msgQueue->Process();
 	}
@@ -206,16 +237,26 @@ void CLevel2UserApi::Disconnect()
 	if (m_msgQueue)
 	{
 		m_msgQueue->StopThread();
-		m_msgQueue->Register(nullptr);
+		m_msgQueue->Register(nullptr,nullptr);
 		m_msgQueue->Clear();
 		delete m_msgQueue;
 		m_msgQueue = nullptr;
+	}
+
+	// 清理队列
+	if (m_remoteQueue)
+	{
+		m_remoteQueue->StopThread();
+		m_remoteQueue->Register(nullptr, nullptr);
+		m_remoteQueue->Clear();
+		delete m_remoteQueue;
+		m_remoteQueue = nullptr;
 	}
 }
 
 void CLevel2UserApi::OnFrontConnected()
 {
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Connected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Connected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
 	//连接成功后自动请求登录
 	ReqUserLogin();
@@ -228,7 +269,7 @@ void CLevel2UserApi::OnFrontDisconnected(int nReason)
 	pField->ErrorID = nReason;
 	GetOnFrontDisconnectedMsg(nReason, pField->ErrorMsg);
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
 }
 
 void CLevel2UserApi::OnRspUserLogin(CSecurityFtdcUserLoginField *pUserLogin, CSecurityFtdcRspInfoField *pRspInfo, int nRequestID, bool bIsLast)
@@ -246,6 +287,9 @@ void CLevel2UserApi::OnRspUserLogin(CSecurityFtdcUserLoginField *pUserLogin, CSe
 		//strncpy(pField->LoginTime, pUserLogin->, sizeof(TimeType));
 		//sprintf(pField->SessionID, "%d:%d", pUserLogin->FrontID, pRspUserLogin->SessionID);
 
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Logined, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Done, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+
 
 		//有可能断线了，本处是断线重连后重新订阅
 		map<string,set<string> > mapOld = m_mapSecurityIDs;//记下上次订阅的合约
@@ -255,7 +299,7 @@ void CLevel2UserApi::OnRspUserLogin(CSecurityFtdcUserLoginField *pUserLogin, CSe
 			string strkey = i->first;
 			set<string> setValue = i->second;
 
-			SubscribeL2MarketData(setValue, strkey);//订阅
+			Subscribe(setValue, strkey); //订阅
 		}
 
 		mapOld = m_mapIndexIDs;//记下上次订阅的合约
@@ -265,7 +309,7 @@ void CLevel2UserApi::OnRspUserLogin(CSecurityFtdcUserLoginField *pUserLogin, CSe
 			string strkey = i->first;
 			set<string> setValue = i->second;
 
-			SubscribeL2Index(setValue, strkey);//订阅
+			Subscribe(setValue, strkey); //订阅
 		}
 	}
 	else
@@ -273,7 +317,7 @@ void CLevel2UserApi::OnRspUserLogin(CSecurityFtdcUserLoginField *pUserLogin, CSe
 		pField->ErrorID = pRspInfo->ErrorID;
 		strncpy(pField->ErrorMsg, pRspInfo->ErrorMsg, sizeof(pRspInfo->ErrorMsg));
 
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
 	}
 }
 
@@ -282,81 +326,252 @@ void CLevel2UserApi::OnRspError(CSecurityFtdcRspInfoField *pRspInfo, int nReques
 	IsErrorRspInfo(pRspInfo, nRequestID, bIsLast);
 }
 
-void CLevel2UserApi::SubscribeL2MarketData(const string& szInstrumentIDs, const string& szExchageID)
+char* GetSetFromString_Index_Stock(const char* szString, const char* seps,
+	vector<char*>& vct_I, set<char*>& st_I, set<string>& st2_I,
+	vector<char*>& vct_S, set<char*>& st_S, set<string>& st2_S,
+	int modify, int before, const char* prefix, const char* exchange)
+{
+	vct_I.clear();
+	st_I.clear();
+	vct_S.clear();
+	st_S.clear();
+
+	if (nullptr == szString
+		|| nullptr == seps)
+		return nullptr;
+
+	if (strlen(szString) == 0
+		|| strlen(seps) == 0)
+		return nullptr;
+
+	//这里不知道要添加的字符有多长，很悲剧
+	size_t len = (size_t)(strlen(szString)*1.5 + 1);
+	char* buf = new char[len];
+	strncpy(buf, szString, len);
+
+	char* token = strtok(buf, seps);
+	while (token)
+	{
+		if (strlen(token)>0)
+		{
+			char temp[64] = { 0 };
+			if (prefix)
+			{
+				if (before>0)
+				{
+					sprintf(temp, "%s%s", prefix, token);
+				}
+				else
+				{
+					sprintf(temp, "%s%s", token, prefix);
+				}
+			}
+			else
+			{
+				sprintf(temp, "%s", token);
+			}
+
+			int instrumentId = atoi(token);
+
+			bool bIndex = false;
+			if (strlen(token) == 8)
+			{
+				bIndex = false;
+			}
+			else if (exchange[1] == 'Z')
+			{
+				if (InstrumentType::Index == InstrumentID_2_InstrumentType_SZE(instrumentId))
+					bIndex = true;
+			}
+			else
+			{
+				if (InstrumentType::Index == InstrumentID_2_InstrumentType_SSE(instrumentId))
+					bIndex = true;
+			}		
+
+			if (modify > 0)
+			{
+				if (bIndex)
+				{
+					st2_I.insert(temp);
+				}
+				else
+				{
+					st2_S.insert(temp);
+				}
+			}
+			else if (modify < 0)
+			{
+				if (bIndex)
+				{
+					st2_I.erase(temp);
+				}
+				else
+				{
+					st2_S.erase(temp);
+				}
+			}
+
+			if (bIndex)
+			{
+				vct_I.push_back(token);
+				st_I.insert(token);
+			}
+			else
+			{
+				vct_S.push_back(token);
+				st_S.insert(token);
+			}
+		}
+		token = strtok(nullptr, seps);
+	}
+
+	return buf;
+}
+
+void CLevel2UserApi::Subscribe(const string& szInstrumentIDs, const string& szExchageID)
 {
 	if(nullptr == m_pApi)
 		return;
 
-	vector<char*> vct;
-	set<char*> st;
+	vector<char*> vct_I;
+	set<char*> st_I;
+	vector<char*> vct_S;
+	set<char*> st_S;
 
-	lock_guard<mutex> cl(m_csMapSecurityIDs);
+	lock_guard<mutex> cl(m_csMapIDs);
 
 	set<string> _setInstrumentIDs;
-	map<string, set<string> >::iterator it = m_mapSecurityIDs.find(szExchageID);
-	if (it != m_mapSecurityIDs.end())
+	set<string> _setIndexIDs;
 	{
-		_setInstrumentIDs = it->second;
+		map<string, set<string> >::iterator it = m_mapSecurityIDs.find(szExchageID);
+		if (it != m_mapSecurityIDs.end())
+		{
+			_setInstrumentIDs = it->second;
+		}
 	}
+	{
+		map<string, set<string> >::iterator it = m_mapIndexIDs.find(szExchageID);
+		if (it != m_mapIndexIDs.end())
+		{
+			_setIndexIDs = it->second;
+		}
+	}
+	
+	// 分解
+	char* pBuf = GetSetFromString_Index_Stock(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_,
+		vct_I, st_I, _setIndexIDs,
+		vct_S, st_S, _setInstrumentIDs,
+		1, 1, nullptr, szExchageID.c_str());
 
-	char* pBuf = GetSetFromString(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_, vct, st, 1, _setInstrumentIDs);
 	m_mapSecurityIDs[szExchageID] = _setInstrumentIDs;
+	m_mapIndexIDs[szExchageID] = _setIndexIDs;
 
-	if (vct.size()>0)
+	if (vct_I.size()>0)
 	{
 		//转成字符串数组
-		char** pArray = new char*[vct.size()];
-		for (size_t j = 0; j<vct.size(); ++j)
+		char** pArray = new char*[vct_I.size()];
+		for (size_t j = 0; j<vct_I.size(); ++j)
 		{
-			pArray[j] = vct[j];
+			pArray[j] = vct_I[j];
 		}
 
 		//订阅
-		m_pApi->SubscribeL2MarketData(pArray, (int)vct.size(), (char*)(szExchageID.c_str()));
+		m_pApi->SubscribeL2Index(pArray, (int)vct_I.size(), (char*)(szExchageID.c_str()));
 
 		delete[] pArray;
 	}
+
+	if (vct_S.size()>0)
+	{
+		//转成字符串数组
+		char** pArray = new char*[vct_S.size()];
+		for (size_t j = 0; j<vct_S.size(); ++j)
+		{
+			pArray[j] = vct_S[j];
+		}
+
+		//订阅
+		m_pApi->SubscribeL2MarketData(pArray, (int)vct_S.size(), (char*)(szExchageID.c_str()));
+
+		delete[] pArray;
+	}
+
 	delete[] pBuf;
 }
 
-void CLevel2UserApi::UnSubscribeL2MarketData(const string& szInstrumentIDs, const string& szExchageID)
+void CLevel2UserApi::Unsubscribe(const string& szInstrumentIDs, const string& szExchageID)
 {
 	if (nullptr == m_pApi)
 		return;
 
-	vector<char*> vct;
-	set<char*> st;
+	vector<char*> vct_I;
+	set<char*> st_I;
+	vector<char*> vct_S;
+	set<char*> st_S;
 
-	lock_guard<mutex> cl(m_csMapSecurityIDs);
+	lock_guard<mutex> cl(m_csMapIDs);
 
 	set<string> _setInstrumentIDs;
-	map<string, set<string> >::iterator it = m_mapSecurityIDs.find(szExchageID);
-	if (it != m_mapSecurityIDs.end())
+	set<string> _setIndexIDs;
 	{
-		_setInstrumentIDs = it->second;
+		map<string, set<string> >::iterator it = m_mapSecurityIDs.find(szExchageID);
+		if (it != m_mapSecurityIDs.end())
+		{
+			_setInstrumentIDs = it->second;
+		}
+	}
+	{
+		map<string, set<string> >::iterator it = m_mapIndexIDs.find(szExchageID);
+		if (it != m_mapIndexIDs.end())
+		{
+			_setIndexIDs = it->second;
+		}
 	}
 
-	char* pBuf = GetSetFromString(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_, vct, st, -1, _setInstrumentIDs);
-	m_mapSecurityIDs[szExchageID] = _setInstrumentIDs;
+	// 分解
+	char* pBuf = GetSetFromString_Index_Stock(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_,
+		vct_I, st_I, _setIndexIDs,
+		vct_S, st_S, _setInstrumentIDs,
+		-1, 1, nullptr, szExchageID.c_str());
 
-	if (vct.size()>0)
+	m_mapSecurityIDs[szExchageID] = _setInstrumentIDs;
+	m_mapIndexIDs[szExchageID] = _setIndexIDs;
+
+	if (vct_I.size()>0)
 	{
 		//转成字符串数组
-		char** pArray = new char*[vct.size()];
-		for (size_t j = 0; j<vct.size(); ++j)
+		char** pArray = new char*[vct_I.size()];
+		for (size_t j = 0; j<vct_I.size(); ++j)
 		{
-			pArray[j] = vct[j];
+			pArray[j] = vct_I[j];
 		}
 
 		//订阅
-		m_pApi->UnSubscribeL2MarketData(pArray, (int)vct.size(), (char*)(szExchageID.c_str()));
+		m_pApi->UnSubscribeL2Index(pArray, (int)vct_I.size(), (char*)(szExchageID.c_str()));
 
 		delete[] pArray;
 	}
+
+	if (vct_S.size()>0)
+	{
+		//转成字符串数组
+		char** pArray = new char*[vct_S.size()];
+		for (size_t j = 0; j<vct_S.size(); ++j)
+		{
+			pArray[j] = vct_S[j];
+		}
+
+		//订阅
+		m_pApi->UnSubscribeL2MarketData(pArray, (int)vct_S.size(), (char*)(szExchageID.c_str()));
+
+		delete[] pArray;
+	}
+
 	delete[] pBuf;
 }
 
-void CLevel2UserApi::SubscribeL2MarketData(const set<string>& instrumentIDs, const string& szExchageID)
+void CLevel2UserApi::Subscribe(const set<string>& instrumentIDs, const string& szExchageID)
 {
 	if(nullptr == m_pApi)
 		return;
@@ -364,13 +579,14 @@ void CLevel2UserApi::SubscribeL2MarketData(const set<string>& instrumentIDs, con
 	string szInstrumentIDs;
 	for(set<string>::iterator i=instrumentIDs.begin();i!=instrumentIDs.end();++i)
 	{
+		
 		szInstrumentIDs.append(*i);
 		szInstrumentIDs.append(";");
 	}
 
 	if (szInstrumentIDs.length()>1)
 	{
-		SubscribeL2MarketData(szInstrumentIDs, szExchageID);
+		Subscribe(szInstrumentIDs, szExchageID);
 	}
 }
 
@@ -380,7 +596,7 @@ void CLevel2UserApi::OnRspSubL2MarketData(CSecurityFtdcSpecificInstrumentField *
 	if(!IsErrorRspInfo(pRspInfo,nRequestID,bIsLast)
 		&& pSpecificInstrument)
 	{
-		lock_guard<mutex> cl(m_csMapSecurityIDs);
+		lock_guard<mutex> cl(m_csMapIDs);
 
 		set<string> _setInstrumentIDs;
 		map<string, set<string> >::iterator it = m_mapSecurityIDs.find(pSpecificInstrument->ExchangeID);
@@ -400,7 +616,7 @@ void CLevel2UserApi::OnRspUnSubL2MarketData(CSecurityFtdcSpecificInstrumentField
 	if(!IsErrorRspInfo(pRspInfo,nRequestID,bIsLast)
 		&& pSpecificInstrument)
 	{
-		lock_guard<mutex> cl(m_csMapSecurityIDs);
+		lock_guard<mutex> cl(m_csMapIDs);
 
 		set<string> _setInstrumentIDs;
 		map<string, set<string> >::iterator it = m_mapSecurityIDs.find(pSpecificInstrument->ExchangeID);
@@ -415,11 +631,12 @@ void CLevel2UserApi::OnRspUnSubL2MarketData(CSecurityFtdcSpecificInstrumentField
 
 void CLevel2UserApi::OnRtnL2MarketData(CSecurityFtdcL2MarketDataField *pL2MarketData)
 {
-	DepthMarketDataField* pField = (DepthMarketDataField*)m_msgQueue->new_block(sizeof(DepthMarketDataField));
+	DepthMarketDataNField* pField = (DepthMarketDataNField*)m_msgQueue->new_block(sizeof(DepthMarketDataNField)+sizeof(DepthField)* 20);
 	strncpy(pField->InstrumentID, pL2MarketData->InstrumentID, sizeof(InstrumentIDType));
-	strncpy(pField->ExchangeID, pL2MarketData->ExchangeID, sizeof(ExchangeIDType));
+	
+	pField->Exchange = TSecurityFtdcExchangeIDType_2_ExchangeType(pL2MarketData->ExchangeID);
 
-	sprintf(pField->Symbol, "%s.%s", pField->InstrumentID, pField->ExchangeID);
+	sprintf(pField->Symbol, "%s.%s", pField->InstrumentID, pL2MarketData->ExchangeID);
 
 	GetExchangeTime(pL2MarketData->TradingDay, pL2MarketData->TradingDay, pL2MarketData->TimeStamp
 		, &pField->TradingDay, &pField->ActionDay, &pField->UpdateTime, &pField->UpdateMillisec);
@@ -428,167 +645,212 @@ void CLevel2UserApi::OnRtnL2MarketData(CSecurityFtdcL2MarketDataField *pL2Market
 	pField->Volume = pL2MarketData->TotalTradeVolume;
 	pField->Turnover = pL2MarketData->TotalTradeValue;
 	//marketData.OpenInterest = pL2MarketData->OpenInterest;
-	//marketData.AveragePrice = pL2MarketData->AveragePrice;
+	//pField->AveragePrice = pL2MarketData->;
 
-	pField->OpenPrice = pL2MarketData->OpenPrice;
-	pField->HighestPrice = pL2MarketData->HighPrice;
-	pField->LowestPrice = pL2MarketData->LowPrice;
-	pField->ClosePrice = pL2MarketData->ClosePrice;
-	//marketData.SettlementPrice = pL2MarketData->SettlementPrice;
+	pField->OpenPrice = pL2MarketData->OpenPrice == DBL_MAX ? 0 : pL2MarketData->OpenPrice;
+	pField->HighestPrice = pL2MarketData->HighPrice == DBL_MAX ? 0 : pL2MarketData->HighPrice;
+	pField->LowestPrice = pL2MarketData->LowPrice == DBL_MAX ? 0 : pL2MarketData->LowPrice;
+	pField->ClosePrice = pL2MarketData->ClosePrice == DBL_MAX ? 0 : pL2MarketData->ClosePrice;
+	//pField->SettlementPrice = pL2MarketData->SettlementPrice;
 
-	//marketData.UpperLimitPrice = pL2MarketData->UpperLimitPrice;
-	//marketData.LowerLimitPrice = pL2MarketData->LowerLimitPrice;
-	//marketData.PreClosePrice = pL2MarketData->PreClosePrice;
-	//marketData.PreSettlementPrice = pL2MarketData->PreSettlementPrice;
-	//marketData.PreOpenInterest = pL2MarketData->PreOpenInterest;
+	//pField->UpperLimitPrice = pL2MarketData->UpperLimitPrice;
+	//pField->LowerLimitPrice = pL2MarketData->LowerLimitPrice;
+	pField->PreClosePrice = pL2MarketData->PreClosePrice;
+	//pField->PreSettlementPrice = pL2MarketData->PreSettlementPrice;
+	//pField->PreOpenInterest = pL2MarketData->PreOpenInterest;
 
-	pField->BidPrice1 = pL2MarketData->BidPrice1;
-	pField->BidVolume1 = pL2MarketData->BidVolume1;
-	pField->AskPrice1 = pL2MarketData->OfferPrice1;
-	pField->AskVolume1 = pL2MarketData->OfferVolume1;
+	InitBidAsk(pField);
 
-	//if (pDepthMarketData->BidPrice2 != DBL_MAX || pDepthMarketData->AskPrice2 != DBL_MAX)
+	do
 	{
-		pField->BidPrice2 = pL2MarketData->BidPrice2;
-		pField->BidVolume2 = pL2MarketData->BidVolume2;
-		pField->AskPrice2 = pL2MarketData->OfferPrice2;
-		pField->AskVolume2 = pL2MarketData->OfferVolume2;
+		if (pL2MarketData->BidVolume1 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice1, pL2MarketData->BidVolume1, pL2MarketData->BidCount1);
 
-		pField->BidPrice3 = pL2MarketData->BidPrice3;
-		pField->BidVolume3 = pL2MarketData->BidVolume3;
-		pField->AskPrice3 = pL2MarketData->OfferPrice3;
-		pField->AskVolume3 = pL2MarketData->OfferVolume3;
+		if (pL2MarketData->BidVolume2 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice2, pL2MarketData->BidVolume2, pL2MarketData->BidCount2);
 
-		pField->BidPrice4 = pL2MarketData->BidPrice4;
-		pField->BidVolume4 = pL2MarketData->BidVolume4;
-		pField->AskPrice4 = pL2MarketData->OfferPrice2;
-		pField->AskVolume4 = pL2MarketData->OfferVolume4;
+		if (pL2MarketData->BidVolume3 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice3, pL2MarketData->BidVolume3, pL2MarketData->BidCount3);
 
-		pField->BidPrice5 = pL2MarketData->BidPrice5;
-		pField->BidVolume5 = pL2MarketData->BidVolume5;
-		pField->AskPrice5 = pL2MarketData->OfferPrice5;
-		pField->AskVolume5 = pL2MarketData->OfferVolume5;
+		if (pL2MarketData->BidVolume4 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice4, pL2MarketData->BidVolume4, pL2MarketData->BidCount4);
 
-		//marketData.BidPrice5 = pL2MarketData->BidPrice5;
-		//marketData.BidVolume5 = pL2MarketData->BidVolume5;
-		//marketData.AskPrice5 = pL2MarketData->OfferPrice5;
-		//marketData.AskVolume5 = pL2MarketData->OfferVolume5;
+		if (pL2MarketData->BidVolume5 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice5, pL2MarketData->BidVolume5, pL2MarketData->BidCount5);
 
-		//marketData.BidPrice5 = pL2MarketData->BidPrice5;
-		//marketData.BidVolume5 = pL2MarketData->BidVolume5;
-		//marketData.AskPrice5 = pL2MarketData->OfferPrice5;
-		//marketData.AskVolume5 = pL2MarketData->OfferVolume5;
+		if (pL2MarketData->BidVolume6 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice6, pL2MarketData->BidVolume6, pL2MarketData->BidCount6);
 
-		//marketData.BidPrice5 = pL2MarketData->BidPrice5;
-		//marketData.BidVolume5 = pL2MarketData->BidVolume5;
-		//marketData.AskPrice5 = pL2MarketData->OfferPrice5;
-		//marketData.AskVolume5 = pL2MarketData->OfferVolume5;
+		if (pL2MarketData->BidVolume7 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice7, pL2MarketData->BidVolume7, pL2MarketData->BidCount7);
 
-		//marketData.BidPrice5 = pL2MarketData->BidPrice5;
-		//marketData.BidVolume5 = pL2MarketData->BidVolume5;
-		//marketData.AskPrice5 = pL2MarketData->OfferPrice5;
-		//marketData.AskVolume5 = pL2MarketData->OfferVolume5;
+		if (pL2MarketData->BidVolume8 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice8, pL2MarketData->BidVolume8, pL2MarketData->BidCount8);
 
-		//marketData.BidPrice5 = pL2MarketData->BidPrice5;
-		//marketData.BidVolume5 = pL2MarketData->BidVolume5;
-		//marketData.AskPrice5 = pL2MarketData->OfferPrice5;
-		//marketData.AskVolume5 = pL2MarketData->OfferVolume5;
+		if (pL2MarketData->BidVolume9 == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPrice9, pL2MarketData->BidVolume9, pL2MarketData->BidCount9);
+
+		if (pL2MarketData->BidVolumeA == 0)
+			break;
+		AddBid(pField, pL2MarketData->BidPriceA, pL2MarketData->BidVolumeA, pL2MarketData->BidCountA);
+	} while (false);
+
+	do
+	{
+		if (pL2MarketData->OfferVolume1 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice1, pL2MarketData->OfferVolume1, pL2MarketData->OfferCount1);
+
+		if (pL2MarketData->OfferVolume2 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice2, pL2MarketData->OfferVolume2, pL2MarketData->OfferCount2);
+
+		if (pL2MarketData->OfferVolume3 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice3, pL2MarketData->OfferVolume3, pL2MarketData->OfferCount3);
+
+		if (pL2MarketData->OfferVolume4 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice4, pL2MarketData->OfferVolume4, pL2MarketData->OfferCount4);
+
+		if (pL2MarketData->OfferVolume5 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice5, pL2MarketData->OfferVolume5, pL2MarketData->OfferCount5);
+
+		if (pL2MarketData->OfferVolume6 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice6, pL2MarketData->OfferVolume6, pL2MarketData->OfferCount6);
+
+		if (pL2MarketData->OfferVolume7 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice7, pL2MarketData->OfferVolume7, pL2MarketData->OfferCount7);
+
+		if (pL2MarketData->OfferVolume8 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice8, pL2MarketData->OfferVolume8, pL2MarketData->OfferCount8);
+
+		if (pL2MarketData->OfferVolume9 == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPrice9, pL2MarketData->OfferVolume9, pL2MarketData->OfferCount9);
+
+		if (pL2MarketData->OfferVolumeA == 0)
+			break;
+		AddAsk(pField, pL2MarketData->OfferPriceA, pL2MarketData->OfferVolumeA, pL2MarketData->OfferCountA);
+	} while (false);
+
+
+	// 这两个队列先头循序不要搞混，有删除功能的语句要放在后面
+	// 如果放前面，会导致远程收到乱码
+#ifdef _REMOTE
+	if (m_remoteQueue)
+	{
+		m_remoteQueue->Input_Copy(ResponeType::OnRtnDepthMarketData, m_msgQueue, m_pClass, DepthLevelType::FULL, 0, pField, pField->Size, nullptr, 0, nullptr, 0);
 	}
+#endif
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnRtnDepthMarketData, m_msgQueue, this, 0, 0, pField, sizeof(DepthMarketDataField), nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnRtnDepthMarketData, m_msgQueue, m_pClass, DepthLevelType::FULL, 0, pField, pField->Size, nullptr, 0, nullptr, 0);
 }
 
-void CLevel2UserApi::SubscribeL2Index(const string& szInstrumentIDs, const string& szExchageID)
-{
-	if (nullptr == m_pApi)
-		return;
+//void CLevel2UserApi::SubscribeL2Index(const string& szInstrumentIDs, const string& szExchageID)
+//{
+//	if (nullptr == m_pApi)
+//		return;
+//
+//	vector<char*> vct;
+//	set<char*> st;
+//
+//	lock_guard<mutex> cl(m_csMapIDs);
+//
+//	set<string> _setInstrumentIDs;
+//	map<string, set<string> >::iterator it = m_mapIndexIDs.find(szExchageID);
+//	if (it != m_mapIndexIDs.end())
+//	{
+//		_setInstrumentIDs = it->second;
+//	}
+//
+//	char* pBuf = GetSetFromString(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_, vct, st, 1, _setInstrumentIDs);
+//	m_mapIndexIDs[szExchageID] = _setInstrumentIDs;
+//
+//	if (vct.size()>0)
+//	{
+//		//转成字符串数组
+//		char** pArray = new char*[vct.size()];
+//		for (size_t j = 0; j<vct.size(); ++j)
+//		{
+//			pArray[j] = vct[j];
+//		}
+//
+//		//订阅
+//		m_pApi->SubscribeL2Index(pArray, (int)vct.size(), (char*)(szExchageID.c_str()));
+//
+//		delete[] pArray;
+//	}
+//	delete[] pBuf;
+//}
 
-	vector<char*> vct;
-	set<char*> st;
-
-	lock_guard<mutex> cl(m_csMapIndexIDs);
-
-	set<string> _setInstrumentIDs;
-	map<string, set<string> >::iterator it = m_mapIndexIDs.find(szExchageID);
-	if (it != m_mapIndexIDs.end())
-	{
-		_setInstrumentIDs = it->second;
-	}
-
-	char* pBuf = GetSetFromString(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_, vct, st, 1, _setInstrumentIDs);
-	m_mapIndexIDs[szExchageID] = _setInstrumentIDs;
-
-	if (vct.size()>0)
-	{
-		//转成字符串数组
-		char** pArray = new char*[vct.size()];
-		for (size_t j = 0; j<vct.size(); ++j)
-		{
-			pArray[j] = vct[j];
-		}
-
-		//订阅
-		m_pApi->SubscribeL2Index(pArray, (int)vct.size(), (char*)(szExchageID.c_str()));
-
-		delete[] pArray;
-	}
-	delete[] pBuf;
-}
-
-void CLevel2UserApi::UnSubscribeL2Index(const string& szInstrumentIDs, const string& szExchageID)
-{
-	if (nullptr == m_pApi)
-		return;
-
-	vector<char*> vct;
-	set<char*> st;
-
-	lock_guard<mutex> cl(m_csMapIndexIDs);
-
-	set<string> _setInstrumentIDs;
-	map<string, set<string> >::iterator it = m_mapIndexIDs.find(szExchageID);
-	if (it != m_mapIndexIDs.end())
-	{
-		_setInstrumentIDs = it->second;
-	}
-
-	char* pBuf = GetSetFromString(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_, vct, st, -1, _setInstrumentIDs);
-	m_mapIndexIDs[szExchageID] = _setInstrumentIDs;
-
-	if (vct.size()>0)
-	{
-		//转成字符串数组
-		char** pArray = new char*[vct.size()];
-		for (size_t j = 0; j<vct.size(); ++j)
-		{
-			pArray[j] = vct[j];
-		}
-
-		//订阅
-		m_pApi->UnSubscribeL2Index(pArray, (int)vct.size(), (char*)(szExchageID.c_str()));
-
-		delete[] pArray;
-	}
-	delete[] pBuf;
-}
-
-void CLevel2UserApi::SubscribeL2Index(const set<string>& instrumentIDs, const string& szExchageID)
-{
-	if (nullptr == m_pApi)
-		return;
-
-	string szInstrumentIDs;
-	for (set<string>::iterator i = instrumentIDs.begin(); i != instrumentIDs.end(); ++i)
-	{
-		szInstrumentIDs.append(*i);
-		szInstrumentIDs.append(";");
-	}
-
-	if (szInstrumentIDs.length()>1)
-	{
-		UnSubscribeL2Index(szInstrumentIDs, szExchageID);
-	}
-}
+//void CLevel2UserApi::UnSubscribeL2Index(const string& szInstrumentIDs, const string& szExchageID)
+//{
+//	if (nullptr == m_pApi)
+//		return;
+//
+//	vector<char*> vct;
+//	set<char*> st;
+//
+//	lock_guard<mutex> cl(m_csMapIndexIDs);
+//
+//	set<string> _setInstrumentIDs;
+//	map<string, set<string> >::iterator it = m_mapIndexIDs.find(szExchageID);
+//	if (it != m_mapIndexIDs.end())
+//	{
+//		_setInstrumentIDs = it->second;
+//	}
+//
+//	char* pBuf = GetSetFromString(szInstrumentIDs.c_str(), _QUANTBOX_SEPS_, vct, st, -1, _setInstrumentIDs);
+//	m_mapIndexIDs[szExchageID] = _setInstrumentIDs;
+//
+//	if (vct.size()>0)
+//	{
+//		//转成字符串数组
+//		char** pArray = new char*[vct.size()];
+//		for (size_t j = 0; j<vct.size(); ++j)
+//		{
+//			pArray[j] = vct[j];
+//		}
+//
+//		//订阅
+//		m_pApi->UnSubscribeL2Index(pArray, (int)vct.size(), (char*)(szExchageID.c_str()));
+//
+//		delete[] pArray;
+//	}
+//	delete[] pBuf;
+//}
+//
+//void CLevel2UserApi::SubscribeL2Index(const set<string>& instrumentIDs, const string& szExchageID)
+//{
+//	if (nullptr == m_pApi)
+//		return;
+//
+//	string szInstrumentIDs;
+//	for (set<string>::iterator i = instrumentIDs.begin(); i != instrumentIDs.end(); ++i)
+//	{
+//		szInstrumentIDs.append(*i);
+//		szInstrumentIDs.append(";");
+//	}
+//
+//	if (szInstrumentIDs.length()>1)
+//	{
+//		UnSubscribeL2Index(szInstrumentIDs, szExchageID);
+//	}
+//}
 
 void CLevel2UserApi::OnRspSubL2Index(CSecurityFtdcSpecificInstrumentField *pSpecificInstrument, CSecurityFtdcRspInfoField *pRspInfo, int nRequestID, bool bIsLast)
 {
@@ -596,7 +858,7 @@ void CLevel2UserApi::OnRspSubL2Index(CSecurityFtdcSpecificInstrumentField *pSpec
 	if (!IsErrorRspInfo(pRspInfo, nRequestID, bIsLast)
 		&& pSpecificInstrument)
 	{
-		lock_guard<mutex> cl(m_csMapIndexIDs);
+		lock_guard<mutex> cl(m_csMapIDs);
 
 		set<string> _setInstrumentIDs;
 		map<string, set<string> >::iterator it = m_mapIndexIDs.find(pSpecificInstrument->ExchangeID);
@@ -616,7 +878,7 @@ void CLevel2UserApi::OnRspUnSubL2Index(CSecurityFtdcSpecificInstrumentField *pSp
 	if (!IsErrorRspInfo(pRspInfo, nRequestID, bIsLast)
 		&& pSpecificInstrument)
 	{
-		lock_guard<mutex> cl(m_csMapIndexIDs);
+		lock_guard<mutex> cl(m_csMapIDs);
 
 		set<string> _setInstrumentIDs;
 		map<string, set<string> >::iterator it = m_mapIndexIDs.find(pSpecificInstrument->ExchangeID);
@@ -631,11 +893,13 @@ void CLevel2UserApi::OnRspUnSubL2Index(CSecurityFtdcSpecificInstrumentField *pSp
 
 void CLevel2UserApi::OnRtnL2Index(CSecurityFtdcL2IndexField *pL2Index)
 {
-	DepthMarketDataField* pField = (DepthMarketDataField*)m_msgQueue->new_block(sizeof(DepthMarketDataField));
+	DepthMarketDataNField* pField = (DepthMarketDataNField*)m_msgQueue->new_block(sizeof(DepthMarketDataNField));
 	strncpy(pField->InstrumentID, pL2Index->InstrumentID, sizeof(InstrumentIDType));
-	strncpy(pField->ExchangeID, pL2Index->ExchangeID, sizeof(ExchangeIDType));
 
-	sprintf(pField->Symbol, "%s.%s", pField->InstrumentID, pField->ExchangeID);
+	pField->Exchange = TSecurityFtdcExchangeIDType_2_ExchangeType(pL2Index->ExchangeID);
+
+	sprintf(pField->Symbol, "%s.%s", pField->InstrumentID, pL2Index->ExchangeID);
+
 	GetExchangeTime(pL2Index->TradingDay, pL2Index->TradingDay, pL2Index->TimeStamp
 		, &pField->TradingDay, &pField->ActionDay, &pField->UpdateTime, &pField->UpdateMillisec);
 
@@ -656,6 +920,8 @@ void CLevel2UserApi::OnRtnL2Index(CSecurityFtdcL2IndexField *pL2Index)
 	pField->PreClosePrice = pL2Index->PreCloseIndex;
 	//marketData.PreSettlementPrice = pL2Index->PreSettlementPrice;
 	//marketData.PreOpenInterest = pL2Index->PreOpenInterest;
+
+	InitBidAsk(pField);
 
 	//marketData.BidPrice1 = pL2MarketData->BidPrice1;
 	//marketData.BidVolume1 = pL2MarketData->BidVolume1;
@@ -685,5 +951,14 @@ void CLevel2UserApi::OnRtnL2Index(CSecurityFtdcL2IndexField *pL2Index)
 	//	marketData.AskVolume5 = pL2MarketData->OfferVolume5;
 	//}
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnRtnDepthMarketData, m_msgQueue, this, DepthLevelType::L0, 0, pField, sizeof(DepthMarketDataField), nullptr, 0, nullptr, 0);
+	// 这两个队列先头循序不要搞混，有删除功能的语句要放在后面
+	// 如果放前面，会导致远程收到乱码
+#ifdef _REMOTE
+	if (m_remoteQueue)
+	{
+		m_remoteQueue->Input_Copy(ResponeType::OnRtnDepthMarketData, m_msgQueue, m_pClass, DepthLevelType::FULL, 0, pField, pField->Size, nullptr, 0, nullptr, 0);
+	}
+#endif
+
+	m_msgQueue->Input_NoCopy(ResponeType::OnRtnDepthMarketData, m_msgQueue, m_pClass, DepthLevelType::FULL, 0, pField, pField->Size, nullptr, 0, nullptr, 0);
 }

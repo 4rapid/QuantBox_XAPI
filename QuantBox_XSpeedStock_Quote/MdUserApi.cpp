@@ -7,6 +7,8 @@
 #include "../include/ApiStruct.h"
 
 #include "../include/toolkit.h"
+#include "../include/ApiProcess.h"
+#include "../QuantBox_XSpeedStock_Trade/TypeConvert.h"
 
 #include "../QuantBox_Queue/MsgQueue.h"
 
@@ -38,7 +40,7 @@ char* ExchangeID_2to3(char* exchange)
 void* __stdcall Query(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3)
 {
 	// 由内部调用，不用检查是否为空
-	CMdUserApi* pApi = (CMdUserApi*)pApi1;
+	CMdUserApi* pApi = (CMdUserApi*)pApi2;
 	pApi->QueryInThread(type, pApi1, pApi2, double1, double2, ptr1, size1, ptr2, size2, ptr3, size3);
 	return nullptr;
 }
@@ -72,13 +74,14 @@ void CMdUserApi::QueryInThread(char type, void* pApi1, void* pApi2, double doubl
 	this_thread::sleep_for(chrono::milliseconds(m_nSleep));
 }
 
-void CMdUserApi::Register(void* pCallback)
+void CMdUserApi::Register(void* pCallback, void* pClass)
 {
+	m_pClass = pClass;
 	if (m_msgQueue == nullptr)
 		return;
 
-	m_msgQueue_Query->Register(Query);
-	m_msgQueue->Register(pCallback);
+	m_msgQueue_Query->Register(Query,this);
+	m_msgQueue->Register(pCallback,this);
 	if (pCallback)
 	{
 		m_msgQueue_Query->StartThread();
@@ -101,7 +104,7 @@ CMdUserApi::CMdUserApi(void)
 	m_msgQueue = new CMsgQueue();
 	m_msgQueue_Query = new CMsgQueue();
 
-	m_msgQueue_Query->Register(Query);
+	m_msgQueue_Query->Register(Query,this);
 	m_msgQueue_Query->StartThread();
 }
 
@@ -127,7 +130,7 @@ bool CMdUserApi::IsErrorRspInfo_Output(struct DFITCSECRspInfoField *pRspInfo)
 		pField->ErrorID = pRspInfo->errorID;
 		strcpy(pField->ErrorMsg, pRspInfo->errorMsg);
 
-		m_msgQueue->Input_NoCopy(ResponeType::OnRtnError, m_msgQueue, this, true, 0, pField, sizeof(ErrorField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnRtnError, m_msgQueue, m_pClass, true, 0, pField, sizeof(ErrorField), nullptr, 0, nullptr, 0);
 	}
 	return bRet;
 }
@@ -147,7 +150,7 @@ void CMdUserApi::Connect(const string& szPath,
 	memcpy(&m_ServerInfo, pServerInfo, sizeof(ServerInfoField));
 	memcpy(&m_UserInfo, pUserInfo, sizeof(UserInfoField));
 
-	m_msgQueue_Query->Input_NoCopy(RequestType::E_Init, this, nullptr, 0, 0,
+	m_msgQueue_Query->Input_NoCopy(RequestType::E_Init, m_msgQueue_Query, this, 0, 0,
 		nullptr, 0, nullptr, 0, nullptr, 0);
 }
 
@@ -155,9 +158,9 @@ int CMdUserApi::_Init()
 {
 	m_pApi = DFITCSECMdApi::CreateDFITCMdApi();
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Initialized, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Initialized, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Connecting, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Connecting, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 	//初始化连接
 	int iRet = m_pApi->Init(m_ServerInfo.Address, this);
 	if (0 == iRet)
@@ -170,7 +173,7 @@ int CMdUserApi::_Init()
 		pField->ErrorID = iRet;
 		strcpy(pField->ErrorMsg, "连接超时");
 
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
 	}
 	return iRet;
 }
@@ -182,13 +185,13 @@ void CMdUserApi::ReqStockUserLogin()
 	strncpy(pBody->accountID, m_UserInfo.UserID, sizeof(DFITCSECAccountIDType));
 	strncpy(pBody->passWord, m_UserInfo.Password, sizeof(DFITCSECPasswordType));
 
-	m_msgQueue_Query->Input_NoCopy(RequestType::E_StockUserLoginField, this, nullptr, 0, 0,
+	m_msgQueue_Query->Input_NoCopy(RequestType::E_StockUserLoginField, m_msgQueue_Query, this, 0, 0,
 		pBody, sizeof(DFITCSECReqUserLoginField), nullptr, 0, nullptr, 0);
 }
 
 int CMdUserApi::_ReqStockUserLogin(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3)
 {
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Logining, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Logining, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
 	DFITCSECReqUserLoginField* pBody = (DFITCSECReqUserLoginField*)ptr1;
 	pBody->requestID = ++m_lRequestID;
@@ -201,7 +204,7 @@ void CMdUserApi::Disconnect()
 	if (m_msgQueue_Query)
 	{
 		m_msgQueue_Query->StopThread();
-		m_msgQueue_Query->Register(nullptr);
+		m_msgQueue_Query->Register(nullptr,nullptr);
 		m_msgQueue_Query->Clear();
 		delete m_msgQueue_Query;
 		m_msgQueue_Query = nullptr;
@@ -215,7 +218,7 @@ void CMdUserApi::Disconnect()
 
 		// 全清理，只留最后一个
 		m_msgQueue->Clear();
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 		// 主动触发
 		m_msgQueue->Process();
 	}
@@ -224,7 +227,7 @@ void CMdUserApi::Disconnect()
 	if (m_msgQueue)
 	{
 		m_msgQueue->StopThread();
-		m_msgQueue->Register(nullptr);
+		m_msgQueue->Register(nullptr,nullptr);
 		m_msgQueue->Clear();
 		delete m_msgQueue;
 		m_msgQueue = nullptr;
@@ -353,7 +356,7 @@ void CMdUserApi::Unsubscribe(const string& szInstrumentIDs, const string& szExch
 
 void CMdUserApi::OnFrontConnected()
 {
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Connected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Connected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
 	//连接成功后自动请求登录
 	ReqStockUserLogin();
@@ -369,7 +372,7 @@ void CMdUserApi::OnFrontDisconnected(int nReason)
 	pField->ErrorID = nReason;
 	GetOnFrontDisconnectedMsg(nReason, pField->ErrorMsg);
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+	m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
 }
 
 void CMdUserApi::OnRspStockUserLogin(struct DFITCSECRspUserLoginField * pRspUserLogin, struct DFITCSECRspInfoField * pRspInfo)
@@ -384,8 +387,8 @@ void CMdUserApi::OnRspStockUserLogin(struct DFITCSECRspUserLoginField * pRspUser
 
 		sprintf(pField->SessionID, "%d:%d", pRspUserLogin->frontID, pRspUserLogin->sessionID);
 
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Logined, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Done, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Logined, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Done, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
 		//有可能断线了，本处是断线重连后重新订阅
 		map<string, set<string> > mapOld = m_mapInstrumentIDs;//记下上次订阅的合约
@@ -407,7 +410,7 @@ void CMdUserApi::OnRspStockUserLogin(struct DFITCSECRspUserLoginField * pRspUser
 		pField->ErrorID = pRspInfo->errorID;
 		strncpy(pField->ErrorMsg, pRspInfo->errorMsg, sizeof(ErrorMsgType));
 
-		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, this, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
+		m_msgQueue->Input_NoCopy(ResponeType::OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::Disconnected, 0, pField, sizeof(RspUserLoginField), nullptr, 0, nullptr, 0);
 	}
 }
 
@@ -458,12 +461,13 @@ void CMdUserApi::OnRspStockUnSubMarketData(struct DFITCSECSpecificInstrumentFiel
 //行情回调，得保证此函数尽快返回
 void CMdUserApi::OnStockMarketData(struct DFITCStockDepthMarketDataField *pMarketDataField)
 {
-	DepthMarketDataField* pField = (DepthMarketDataField*)m_msgQueue->new_block(sizeof(DepthMarketDataField));
+	DepthMarketDataNField* pField = (DepthMarketDataNField*)m_msgQueue->new_block(sizeof(DepthMarketDataNField)+sizeof(DepthField)* 10);
+
 
 	strcpy(pField->InstrumentID, pMarketDataField->staticDataField.securityID);
-	strcpy(pField->ExchangeID, pMarketDataField->staticDataField.exchangeID);
+	pField->Exchange = DFITCSECExchangeIDType_2_ExchangeType(pMarketDataField->staticDataField.exchangeID);
 
-	sprintf(pField->Symbol, "%s.%s", pField->InstrumentID, pField->ExchangeID);
+	sprintf(pField->Symbol, "%s.%s", pField->InstrumentID, pMarketDataField->staticDataField.exchangeID);
 
 	pField->TradingDay = pMarketDataField->staticDataField.tradingDay;
 	pField->ActionDay = pMarketDataField->staticDataField.tradingDay;
@@ -487,32 +491,55 @@ void CMdUserApi::OnStockMarketData(struct DFITCStockDepthMarketDataField *pMarke
 	//marketData.PreSettlementPrice = pMarketDataField->preSettlementPrice;
 	//marketData.PreOpenInterest = pMarketDataField->preOpenInterest;
 
-	pField->BidPrice1 = pMarketDataField->sharedDataField.bidPrice1;
-	pField->BidVolume1 = pMarketDataField->sharedDataField.bidQty1;
-	pField->AskPrice1 = pMarketDataField->sharedDataField.askPrice1;
-	pField->AskVolume1 = pMarketDataField->sharedDataField.askQty1;
+	InitBidAsk(pField);
 
-	pField->BidPrice2 = pMarketDataField->sharedDataField.bidPrice2;
-	pField->BidVolume2 = pMarketDataField->sharedDataField.bidQty2;
-	pField->AskPrice2 = pMarketDataField->sharedDataField.askPrice2;
-	pField->AskVolume2 = pMarketDataField->sharedDataField.askQty2;
+	do
+	{
+		if (pMarketDataField->sharedDataField.bidQty1 == 0)
+			break;
+		AddBid(pField, pMarketDataField->sharedDataField.bidPrice1, pMarketDataField->sharedDataField.bidQty1, 0);
 
-	pField->BidPrice3 = pMarketDataField->sharedDataField.bidPrice3;
-	pField->BidVolume3 = pMarketDataField->sharedDataField.bidQty3;
-	pField->AskPrice3 = pMarketDataField->sharedDataField.askPrice3;
-	pField->AskVolume3 = pMarketDataField->sharedDataField.askQty3;
+		if (pMarketDataField->sharedDataField.bidQty2 == 0)
+			break;
+		AddBid(pField, pMarketDataField->sharedDataField.bidPrice2, pMarketDataField->sharedDataField.bidQty2, 0);
 
-	pField->BidPrice4 = pMarketDataField->sharedDataField.bidPrice4;
-	pField->BidVolume4 = pMarketDataField->sharedDataField.bidQty4;
-	pField->AskPrice4 = pMarketDataField->sharedDataField.askPrice4;
-	pField->AskVolume4 = pMarketDataField->sharedDataField.askQty4;
+		if (pMarketDataField->sharedDataField.bidQty3 == 0)
+			break;
+		AddBid(pField, pMarketDataField->sharedDataField.bidPrice3, pMarketDataField->sharedDataField.bidQty3, 0);
 
-	pField->BidPrice5 = pMarketDataField->sharedDataField.bidPrice5;
-	pField->BidVolume5 = pMarketDataField->sharedDataField.bidQty5;
-	pField->AskPrice5 = pMarketDataField->sharedDataField.askPrice5;
-	pField->AskVolume5 = pMarketDataField->sharedDataField.askQty5;
+		if (pMarketDataField->sharedDataField.bidQty4 == 0)
+			break;
+		AddBid(pField, pMarketDataField->sharedDataField.bidPrice4, pMarketDataField->sharedDataField.bidQty4, 0);
 
-	m_msgQueue->Input_NoCopy(ResponeType::OnRtnDepthMarketData, m_msgQueue, this, 0, 0, pField, sizeof(DepthMarketDataField), nullptr, 0, nullptr, 0);
+		if (pMarketDataField->sharedDataField.bidQty5 == 0)
+			break;
+		AddBid(pField, pMarketDataField->sharedDataField.bidPrice5, pMarketDataField->sharedDataField.bidQty5, 0);
+	} while (false);
+
+	do
+	{
+		if (pMarketDataField->sharedDataField.askQty1 == 0)
+			break;
+		AddAsk(pField, pMarketDataField->sharedDataField.askPrice1, pMarketDataField->sharedDataField.askQty1, 0);
+
+		if (pMarketDataField->sharedDataField.askQty2 == 0)
+			break;
+		AddAsk(pField, pMarketDataField->sharedDataField.askPrice2, pMarketDataField->sharedDataField.askQty2, 0);
+
+		if (pMarketDataField->sharedDataField.askQty3 == 0)
+			break;
+		AddAsk(pField, pMarketDataField->sharedDataField.askPrice3, pMarketDataField->sharedDataField.askQty3, 0);
+
+		if (pMarketDataField->sharedDataField.askQty4 == 0)
+			break;
+		AddAsk(pField, pMarketDataField->sharedDataField.askPrice4, pMarketDataField->sharedDataField.askQty4, 0);
+
+		if (pMarketDataField->sharedDataField.askQty5 == 0)
+			break;
+		AddAsk(pField, pMarketDataField->sharedDataField.askPrice5, pMarketDataField->sharedDataField.askQty5, 0);
+	} while (false);
+
+	m_msgQueue->Input_NoCopy(ResponeType::OnRtnDepthMarketData, m_msgQueue, m_pClass, DepthLevelType::FULL, 0, pField, pField->Size, nullptr, 0, nullptr, 0);
 }
 
 //void CMdUserApi::OnRspSubForQuoteRsp(CThostFtdcSpecificInstrumentField *pSpecificInstrument, CThostFtdcRspInfoField *pRspInfo, int nRequestID, bool bIsLast)
@@ -560,7 +587,7 @@ void CMdUserApi::ReqStockAvailableQuotQry(const string& szInstrumentId, const st
 	strcpy(pBody->accountID, m_UserInfo.UserID);
 	strncpy(pBody->exchangeID, szExchange.c_str(), sizeof(DFITCSECExchangeIDType));
 
-	m_msgQueue_Query->Input_NoCopy(RequestType::E_ReqSOPQuotQryField, this, nullptr, 0, 0,
+	m_msgQueue_Query->Input_NoCopy(RequestType::E_ReqSOPQuotQryField, m_msgQueue_Query, this, 0, 0,
 		pBody, sizeof(DFITCReqQuotQryField), nullptr, 0, nullptr, 0);
 }
 
@@ -591,11 +618,11 @@ void CMdUserApi::OnRspStockAvailableQuot(struct DFITCRspQuotQryField * pAvailabl
 			//strncpy(pField->ExpireDate, pInstrumentData->instrumentMaturity, sizeof(DFITCInstrumentMaturityType));
 			//pField->OptionsType = TThostFtdcOptionsTypeType_2_PutCall(pInstrument->OptionsType);
 
-			m_msgQueue->Input_NoCopy(ResponeType::OnRspQryInstrument, m_msgQueue, this, flag, 0, pField, sizeof(InstrumentField), nullptr, 0, nullptr, 0);
+			m_msgQueue->Input_NoCopy(ResponeType::OnRspQryInstrument, m_msgQueue, m_pClass, flag, 0, pField, sizeof(InstrumentField), nullptr, 0, nullptr, 0);
 		}
 		else
 		{
-			m_msgQueue->Input_NoCopy(ResponeType::OnRspQryInstrument, m_msgQueue, this, flag, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+			m_msgQueue->Input_NoCopy(ResponeType::OnRspQryInstrument, m_msgQueue, m_pClass, flag, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 		}
 	}
 }

@@ -3,6 +3,7 @@
 #include "../include/ApiStruct.h"
 #include "../include/CTP/ThostFtdcMdApi.h"
 
+
 #ifdef _WIN64
 #pragma comment(lib, "../include/CTP/win64/thostmduserapi.lib")
 #pragma comment(lib, "../lib/QuantBox_Queue_x64.lib")
@@ -33,12 +34,13 @@ public:
 	CMdUserApi(void);
 	virtual ~CMdUserApi(void);
 
-	void Register(void* pCallback);
+	void Register(void* pCallback, void* pClass);
 	ConfigInfoField* Config(ConfigInfoField* pConfigInfo);
 
 	void Connect(const string& szPath,
 		ServerInfoField* pServerInfo,
-		UserInfoField* pUserInfo);
+		UserInfoField* pUserInfo,
+		int count);
 	void Disconnect();
 
 	void Subscribe(const string& szInstrumentIDs, const string& szExchageID);
@@ -94,5 +96,10 @@ private:
 
 	CMsgQueue*					m_msgQueue;				//消息队列指针
 	CMsgQueue*					m_msgQueue_Query;
+	void*						m_pClass;
+
+	CMsgQueue*					m_remoteQueue;
+
+	int							m_TradingDay;
 };
 
